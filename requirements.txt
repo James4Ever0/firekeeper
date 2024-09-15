@@ -1,0 +1,7 @@
+librosa
+numpy
+scikit-learn
+pyaudio
+wave
+joblib
+# python-miio
