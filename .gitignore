@@ -191,3 +191,5 @@ dataset/*
 trash/*
 dataset
 trash
+
+!LICENSE

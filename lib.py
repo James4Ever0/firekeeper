@@ -9,6 +9,7 @@ import joblib
 import tempfile
 import json
 import requests
+import traceback
 from enum import Enum
 
 ENCODING = "utf-8"
@@ -155,17 +156,20 @@ class BeepClassifier:
 
 
 class MessageSender:
-    def __init__(self, url=SIGNAL_SEND_URL, encoding=ENCODING):
+    def __init__(self, url=SIGNAL_SEND_URL, encoding=ENCODING, timeout= 10):
         self.url = url
         self.encoding = encoding
-
+        self.timeout = timeout
     def send(self, message: str, severity: Severity):
-        requests.post(
-            SIGNAL_SEND_URL,
-            data=message.encode(encoding=self.encoding),
-            headers={"Priority": severity},
-        )
-
+        try:
+            requests.post(
+                SIGNAL_SEND_URL,
+                data=message.encode(encoding=self.encoding),
+                headers={"Priority": severity},timeout=self.timeout
+            )
+        except:
+            traceback.print_exc()
+            print("Failed to post the message")
 
 class FireKeeper:
     def __init__(self, beep_threshold=3) -> None:
