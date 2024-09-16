@@ -5,3 +5,5 @@ pyaudio
 wave
 joblib
 # python-miio
+fastapi
+uvicorn

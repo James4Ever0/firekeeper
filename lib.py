@@ -1,19 +1,29 @@
-import pyaudio
-import wave
-import numpy as np
-import librosa
-from sklearn.neural_network import MLPClassifier
-from sklearn.model_selection import train_test_split
-import os
-import joblib
-import tempfile
+import abc
+import http
 import json
-import requests
+import os
+import tempfile
 import traceback
+import wave
 from enum import Enum
+
+import fastapi
+import joblib
+import librosa
+import numpy as np
+import pyaudio
+import requests
+import uvicorn
+from sklearn.model_selection import train_test_split
+from sklearn.neural_network import MLPClassifier
 
 ENCODING = "utf-8"
 SIGNAL_SEND_URL = json.load(open(".secrets.json"))["signal_send_url"]
+
+AUDIO_RECORDER_SERVER_HOST = "0.0.0.0"
+AUDIO_RECORDER_SERVER_PORT = 8225
+AUDIO_RECORDER_SERVER_ENDPOINT = "/record"
+TIMEOUT_SECONDS = 10
 
 
 class Severity(Enum):
@@ -29,7 +39,10 @@ def process_audio_file(file_path):
     return D
 
 
-class AudioRecorder:
+class AbstractAudioRecorder(abc.ABC):
+    @abc.abstractmethod
+    def record(self, output_path: str): ...
+class AudioRecorder(AbstractAudioRecorder):
     def __init__(
         self,
         format=pyaudio.paInt16,
@@ -76,6 +89,49 @@ class AudioRecorder:
         wf.setframerate(self.rate)
         wf.writeframes(b"".join(frames))
         wf.close()
+
+
+class AudioRecorderServer(AudioRecorder):
+    def __init__(
+        self, host=AUDIO_RECORDER_SERVER_HOST, port=AUDIO_RECORDER_SERVER_PORT
+    ):
+        self.host = host
+        self.port = port
+        self.app = fastapi.FastAPI()
+
+    def record_and_reply_audio(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filepath = os.path.join(tmpdir, "audio.wav")
+            self.record(filepath)
+            with open(filepath, "rb") as f:
+                content = f.read()
+                return fastapi.Response(
+                    content=content, media_type="application/octet-stream"
+                )
+
+    def main(self):
+        self.app(AUDIO_RECORDER_SERVER_ENDPOINT)(self.record_and_reply_audio)
+        uvicorn.run(self.app, host=self.host, port=self.port)
+
+
+class AudioRecorderClient(AbstractAudioRecorder):
+    def __init__(
+        self, host: str, port=AUDIO_RECORDER_SERVER_PORT, timeout=TIMEOUT_SECONDS
+    ):
+        self.host = host
+        self.port = port
+        self.endpoint = f"http://{host}:{port}{AUDIO_RECORDER_SERVER_ENDPOINT}"
+        self.timeout = timeout
+
+    def record(self, output_path: str):
+        r = requests.get(self.endpoint, timeout=self.timeout)
+        assert (
+            r.status_code == http.HTTPStatus.OK
+        ), f"Invalid status code: {r.status_code}"
+        content = r.content
+        print("Writing recorded audio to:", output_path)
+        with open(output_path, "wb") as f:
+            f.write(content)
 
 
 class BeepClassifier:
@@ -155,21 +211,30 @@ class BeepClassifier:
             return ret
 
 
+class RemoteBeepClassifier(BeepClassifier):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        self.recorder = AudioRecorderClient(*args, **kwargs)
+
+
 class MessageSender:
-    def __init__(self, url=SIGNAL_SEND_URL, encoding=ENCODING, timeout= 10):
+    def __init__(self, url=SIGNAL_SEND_URL, encoding=ENCODING, timeout=TIMEOUT_SECONDS):
         self.url = url
         self.encoding = encoding
         self.timeout = timeout
+
     def send(self, message: str, severity: Severity):
         try:
             requests.post(
                 SIGNAL_SEND_URL,
                 data=message.encode(encoding=self.encoding),
-                headers={"Priority": severity},timeout=self.timeout
+                headers={"Priority": severity},
+                timeout=self.timeout,
             )
         except:
             traceback.print_exc()
             print("Failed to post the message")
+
 
 class FireKeeper:
     def __init__(self, beep_threshold=3) -> None:
@@ -201,3 +266,9 @@ class FireKeeper:
             print(f"{self.beep_counter} continuous beeps")
             if self.beep_counter >= self.beep_threshold:
                 self.handle_fire()
+
+
+class RemoteFireKeeper(FireKeeper):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        self.beep_classifier = RemoteBeepClassifier(*args, **kwargs)
