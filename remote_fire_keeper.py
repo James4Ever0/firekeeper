@@ -2,7 +2,7 @@ import os
 
 from lib import RemoteFireKeeper
 
-HOST = os.environ.get("AUDIO_RECORDER_SERVER_HOST")
+HOST = os.environ.get("AUDIO_RECORDER_SERVER_HOST", "192.168.5.104")
 
 
 def main():

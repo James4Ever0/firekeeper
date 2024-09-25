@@ -110,7 +110,7 @@ class AudioRecorderServer(AudioRecorder):
                 )
 
     def main(self):
-        self.app(AUDIO_RECORDER_SERVER_ENDPOINT)(self.record_and_reply_audio)
+        self.app.get(AUDIO_RECORDER_SERVER_ENDPOINT)(self.record_and_reply_audio)
         uvicorn.run(self.app, host=self.host, port=self.port)
 
 
