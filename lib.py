@@ -98,6 +98,7 @@ class AudioRecorderServer(AudioRecorder):
         self.host = host
         self.port = port
         self.app = fastapi.FastAPI()
+        super().__init__()
 
     def record_and_reply_audio(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -133,10 +134,24 @@ class AudioRecorderClient(AbstractAudioRecorder):
         with open(output_path, "wb") as f:
             f.write(content)
 
-
-class BeepClassifier:
-    def __init__(self, label: str = "beep", model_path: str = "beep_classifier.pkl"):
+class BaseBeepClassifier(abc.ABC):
+    def __init__(self):
         self.recorder = AudioRecorder()
+    @abc.abstractmethod
+    def predict(self, filepath:str) -> int:
+        ...
+
+    def predict_live(self):
+        print("Performing live prediction")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            audio_filepath = os.path.join(tmpdir, "record.wav")
+            self.recorder.record(audio_filepath)
+            ret = self.predict(audio_filepath)
+            return ret
+
+class BeepClassifier(BaseBeepClassifier):
+    def __init__(self, label: str = "beep", model_path: str = "beep_classifier.pkl"):
+
         self.label = label
         self.model_path = model_path
         if os.path.exists(model_path):
@@ -144,8 +159,8 @@ class BeepClassifier:
         else:
             print("Saved model not found at:", self.model_path)
             self.classifier = None
-
-    def train(self, dataset_directory: str, accuracy_threshold=0.9):
+        super().__init__()
+    def train(self, dataset_directory: str, accuracy_threshold=0.8):
         # Load and process audio data
         audio_files = [
             f"{dataset_directory}/{it}" for it in os.listdir(dataset_directory)
@@ -164,7 +179,7 @@ class BeepClassifier:
         X_train, X_test, y_train, y_test = train_test_split(
             X,
             y,
-            test_size=0.2,  # random_state=42
+            test_size=0.1,  # random_state=42
         )
 
         # Initialize neural network classifier
@@ -202,14 +217,6 @@ class BeepClassifier:
         print("Predicted label:", y)
         return y
 
-    def predict_live(self):
-        print("Performing live prediction")
-        with tempfile.TemporaryDirectory() as tmpdir:
-            audio_filepath = os.path.join(tmpdir, "record.wav")
-            self.recorder.record(audio_filepath)
-            ret = self.predict(audio_filepath)
-            return ret
-
 
 class RemoteBeepClassifier(BeepClassifier):
     def __init__(self, *args, **kwargs):
@@ -228,7 +235,7 @@ class MessageSender:
             requests.post(
                 SIGNAL_SEND_URL,
                 data=message.encode(encoding=self.encoding),
-                headers={"Priority": severity},
+                headers={"Priority": severity.value},
                 timeout=self.timeout,
             )
         except:
@@ -272,3 +279,75 @@ class RemoteFireKeeper(FireKeeper):
     def __init__(self, *args, **kwargs):
         super().__init__()
         self.beep_classifier = RemoteBeepClassifier(*args, **kwargs)
+
+
+class MelBeepClassifier(BaseBeepClassifier):
+    beep_timelen_threshold = 25
+
+    # factor = 1.8 # working for macbook, but not for office
+    factor = 4  # office
+
+    @staticmethod
+    def wav_to_spectrum(filepath: str):
+        y, sr = librosa.load(filepath)
+
+        # Compute Mel spectrogram
+        S = librosa.feature.melspectrogram(y=y, sr=sr)
+
+        # Convert to decibels for visualization
+        S_db = librosa.power_to_db(S, ref=np.max)
+        return S_db
+
+    def predict(self, filepath: str):
+        spectrum = self.wav_to_spectrum(filepath)
+        label = int(self.is_beep_spectrum(spectrum))
+        return label
+
+    def calculate_max_signal_len(self, spectrum):
+        print("min:", min(spectrum), "max:", max(spectrum))
+        threshold_1 = min(spectrum) / 10 * self.factor
+        test_flags_1 = spectrum > threshold_1  # louder
+
+        max_signal_len = 0
+        signal_len = 0
+        for it in test_flags_1:
+            if it:
+                signal_len += 1
+            else:
+                signal_len = 0
+            max_signal_len = max(max_signal_len, signal_len)
+
+        print("max signal len:", max_signal_len)
+        return max_signal_len
+
+    def is_beep_spectrum(self, spectrum):
+        beep_spectrum = spectrum[82:84, :]  # (2, 216)
+
+        max_signal_len = max(
+            self.calculate_max_signal_len(beep_spectrum[0]),
+            self.calculate_max_signal_len(beep_spectrum[1]),
+        )
+        ret = max_signal_len > self.beep_timelen_threshold
+        return ret
+
+    @staticmethod
+    def display_mel_spectrum(spectrum):
+        # Display the Mel spectrogram
+
+        librosa.display.specshow(spectrum, x_axis="time", y_axis="mel")
+        import matplotlib.pyplot as plt
+
+        plt.colorbar(format="%+2.0f dB")
+        plt.title("Mel spectrogram")
+        plt.tight_layout()
+        plt.show()
+
+class RemoteMelBeepClassifier(MelBeepClassifier):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        self.recorder = AudioRecorderClient(*args, **kwargs)
+
+class RemoteMelFireKeeper(FireKeeper):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        self.beep_classifier = RemoteMelBeepClassifier(*args, **kwargs)

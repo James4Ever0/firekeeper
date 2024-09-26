@@ -11,3 +11,7 @@ Make sure the name contains "beep" if the audio file contains the beeping sound 
 Move these files under the folder `dataset`, then run `train_classifier.py`. If the accuracy threshold is satisfied, you will have the model saved.
 
 Run the script `main.py`, as long as there is any potential fire threat detectable by your fellow smoke detectors.
+
+## TODO
+
+- [ ] Remote audio recorder unable to access jack-audio if GUI has login prompt unless manually logging in.
